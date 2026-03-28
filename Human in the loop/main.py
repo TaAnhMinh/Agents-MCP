@@ -6,7 +6,7 @@ from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 from mcp_client.property_client import ToolManager
 from agent.property_agent import PropertyAgent
-from langgraph.checkpoint.memory import MemorySaver # <-- Add this import
+from langgraph.checkpoint.memory import MemorySaver
 
 
 # ==========================================
@@ -18,7 +18,7 @@ class BobOutput(BaseModel):
     description_summary: str = Field(description="A strict 1-sentence summary of the property")
 
 class AliceOutput(BaseModel):
-    is_approved: bool = Field(description="Set to True if Nancy's math makes sense. Set to False if the math is missing, broken, or mathematically impossible.")
+    is_approved: bool = Field(description="Set to True if Nancy's math makes sense and the human approve the selection of the property. Set to False if the math is missing, broken, or mathematically impossible, or the human does not approve the selection of the property.")
     legal_report: str = Field(description="The final legal summary, or an explanation of why the math was rejected.")
 
 # ==========================================
@@ -29,6 +29,7 @@ class TeamState(TypedDict):
     bob_draft: str
     nancy_draft: str
     nancy_approved: bool
+    human_feedback: str
     final_report: str
     alice_approved: bool
 
@@ -64,16 +65,22 @@ async def nancy_node(state: TeamState):
 async def alice_node(state: TeamState):
     print("\n[GRAPH] Routing to Alice...")
     
-    prompt = f"Nancy calculated this: '{state['nancy_draft']}'. Provide a brief legal review. If Nancy's math is missing or completely wrong, reject it."
+    # 1. Check if the human left any notes!
+    manager_notes = state.get("human_feedback", "")
     
-    # Alice returns a JSON string based on our schema
+    # 2. Build a dynamic prompt
+    if manager_notes.strip():
+        instruction = f"The Human Manager reviewed Nancy's math and said: '{manager_notes}'. Please incorporate this feedback into your legal review."
+    else:
+        instruction = "Provide a standard legal review."
+        
+    prompt = f"Nancy calculated this: '{state['nancy_draft']}'. {instruction}"
+    
     raw_json_reply = await alice_agent.chat(prompt)
     print(f"   -> [ALICE'S RAW OUTPUT]: {raw_json_reply}")
     
-    # Parse the JSON
     alice_data = json.loads(raw_json_reply)
     
-    # Dynamically set the clipboard based on Alice's AI decision!
     return {
         "final_report": alice_data["legal_report"],
         "alice_approved": alice_data["is_approved"]
@@ -145,9 +152,16 @@ async def run_graph():
             "Alice",                
             quality_control_router    
         )
-        
         # 4. Compile the engine
-        app = builder.compile()
+        # --- NEW: THE PAUSE BUTTON --- Human in the loop
+        # 1. Initialize the save state
+        memory = MemorySaver()
+        
+        # 2. Compile the graph with an interrupt BEFORE Alice's node
+        app = builder.compile(
+            checkpointer=memory,
+            interrupt_before=["Alice"] 
+        )
 
         # 5. Kick off the workflow!
         user_prompt = "I have two large dogs and need a place with a huge yard. Can you guys help me figure out what I'm looking at financially?"
@@ -158,12 +172,40 @@ async def run_graph():
             "bob_draft": "",
             "nancy_draft": "",
             "nancy_approved": False,
+            "human_feedback": "",
             "final_report": "",
             "alice_approved": False
         }
 
-        # app.ainvoke automatically pushes the clipboard through the entire graph!
-        final_state = await app.ainvoke(initial_clipboard)
+        config = {"configurable": {"thread_id": "customer_123"}}
+
+        # --- PHASE 1: RUN UNTIL PAUSE ---
+        print("\n[SYSTEM] Pushing clipboard down the line...")
+        # Notice we pass the config in so the memory knows where to save!
+        paused_state = await app.ainvoke(initial_clipboard, config)
+
+        # --- THE HUMAN REVIEW INTERVENTION ---
+        print("\n========================================")
+        print(" ⚠️ GRAPH PAUSED: HUMAN REVIEW REQUIRED ⚠️")
+        print("========================================")
+
+        # We can peek at the clipboard while the graph is asleep!
+        current_clipboard = app.get_state(config).values
+        print(f"Nancy's Math Draft:\n{current_clipboard.get('nancy_draft')}")
+        
+        # 1. Capture actual text input from the user
+        print("\n[HUMAN] Type your instructions for Alice.")
+        user_notes = input("        (Or just press ENTER to approve as-is): ")
+
+        # 2. THE MAGIC: Inject the text into the sleeping graph!
+        # This manually updates the 'human_feedback' variable in the database
+        app.update_state(config, {"human_feedback": user_notes})
+
+        # --- PHASE 2: RESUME THE GRAPH ---
+        print("\n[SYSTEM] Resuming graph execution...")
+        # To resume, we pass 'None' as the input, and use the EXACT SAME thread_id.
+        # The graph will load the saved clipboard and pick up exactly where it left off.
+        final_state = await app.ainvoke(None, config)
 
         print("\n========================================")
         print("  FINAL TEAM REPORT")
