@@ -27,6 +27,7 @@ class AliceOutput(BaseModel):
 class TeamState(TypedDict):
     user_request: str
     bob_draft: str
+    rejected_properties: list[str]
     nancy_draft: str
     nancy_approved: bool
     human_feedback: str
@@ -41,16 +42,37 @@ class TeamState(TypedDict):
 
 async def bob_node(state: TeamState):
     print("\n[GRAPH] Routing to Bob...")
+    prompt = state["user_request"]
     
-    # Bob will now return a JSON string!
-    raw_json_reply = await bob_agent.chat(state["user_request"])
+    # 1. Fetch the running blacklist from the clipboard
+    rejected_list = state.get("rejected_properties", [])
+    
+    manager_notes = state.get("human_feedback", "").strip()
+    
+    # If there is feedback AND Bob has a previous draft, we are in a loop!
+    if manager_notes and state.get("bob_draft"):
+        print("   -> [SYSTEM] Passing human rejection feedback to Bob...")
+        try:
+            old_data = json.loads(state["bob_draft"])
+            bad_id = old_data.get("property_id", "")
+            
+            # 2. Add the newly rejected house to the permanent blacklist
+            if bad_id and bad_id not in rejected_list:
+                rejected_list.append(bad_id)
+            
+            # 3. Instruct Bob to use the ENTIRE LIST array
+            prompt += f"\n\nMANAGER FEEDBACK: You previously picked properties that were rejected. The manager said: '{manager_notes}'. You MUST use your semantic_property_search tool and pass this exact array {rejected_list} into the excluded_property_id parameter to find a DIFFERENT property."
+        except Exception:
+            pass
+
+    raw_json_reply = await bob_agent.chat(prompt)
     print(f"   -> [BOB'S RAW OUTPUT]: {raw_json_reply}")
     
-    # We can parse it into a standard Python dictionary to pass to Nancy
-    parsed_reply = json.loads(raw_json_reply)
-    
-    # Write the clean JSON string to the clipboard
-    return {"bob_draft": raw_json_reply} 
+    # 4. Save BOTH the draft and the updated blacklist back to the clipboard!
+    return {
+        "bob_draft": raw_json_reply,
+        "rejected_properties": rejected_list # <-- Updates the state for the next loop!
+    }
 
 async def nancy_node(state: TeamState):
     print("\n[GRAPH] Routing to Nancy...")
@@ -68,11 +90,17 @@ async def alice_node(state: TeamState):
     # 1. Check if the human left any notes!
     manager_notes = state.get("human_feedback", "")
     
-    # 2. Build a dynamic prompt
+    # 2. Build a highly specific, boundary-enforcing prompt
     if manager_notes.strip():
-        instruction = f"The Human Manager reviewed Nancy's math and said: '{manager_notes}'. Please incorporate this feedback into your legal review."
+        instruction = f"""
+        The Human Manager reviewed Nancy's math and said: '{manager_notes}'. 
+        If the manager's note implies rejecting the property or asking for a new one, 
+        you MUST set 'is_approved' to False. 
+        DO NOT use any tools to search for new properties yourself. Leave that to the Realtor. 
+        Just explain the rejection in your legal_report.
+        """
     else:
-        instruction = "Provide a standard legal review."
+        instruction = "Provide a standard legal review. Set is_approved to True if the math is correct."
         
     prompt = f"Nancy calculated this: '{state['nancy_draft']}'. {instruction}"
     
@@ -107,6 +135,7 @@ async def run_graph():
     print("========================================\n")
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Connecting to multiple MCP servers
     server_fleet = {
         "property": os.path.join(base_dir, "mcp_server", "property_server.py"),
         # You could instantly add a new server here tomorrow!
@@ -170,6 +199,7 @@ async def run_graph():
         initial_clipboard = {
             "user_request": user_prompt,
             "bob_draft": "",
+            "rejected_properties": [], # <-- FIX: Initialize the empty array here!
             "nancy_draft": "",
             "nancy_approved": False,
             "human_feedback": "",

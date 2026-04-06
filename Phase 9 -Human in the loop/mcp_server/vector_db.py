@@ -42,17 +42,28 @@ class PropertyDatabase:
             ids=["listing_1", "listing_2", "listing_3", "listing_4"]
         )
 
-    def search_properties(self, search_query: str) -> str:
-        """The public method that the server will call to perform a semantic search."""
+    def search_properties(self, search_query: str, excluded_ids: list[str] = None) -> str:
+        if excluded_ids is None:
+            excluded_ids = []
+            
+        # DYNAMIC N: Always fetch exactly 1 more than the number of excluded IDs
+        dynamic_n = len(excluded_ids) + 1 
+        
         results = self.collection.query(
             query_texts=[search_query],
-            n_results=1
+            n_results=dynamic_n
         )
         
         if not results['ids'][0]:
             return "No matching properties found in the database."
             
-        best_match_text = results['documents'][0][0]
-        best_match_price = results['metadatas'][0][0]['price']
-        
-        return f"Match Found! Price: ${best_match_price}. Description: {best_match_text}"
+        # Loop through the dynamic results and find the one that isn't on the blacklist
+        for i in range(len(results['ids'][0])):
+            match_id = results['ids'][0][i]
+            
+            if match_id not in excluded_ids:
+                best_match_text = results['documents'][0][i]
+                best_match_price = results['metadatas'][0][i]['price']
+                return f"Match Found! Property ID: {match_id}. Price: ${best_match_price}. Description: {best_match_text}"
+                
+        return "No other matching properties found."

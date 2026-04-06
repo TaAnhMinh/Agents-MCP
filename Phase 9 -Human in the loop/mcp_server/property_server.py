@@ -31,20 +31,14 @@ def calculate_mortgage(principal: float, interest_rate: float, years: int) -> st
     return f"The estimated monthly payment is ${round(payment, 2)}"
 
 @mcp.tool()
-def semantic_property_search(search_query: str) -> str:
-    """Use this to search the real estate database for homes based on natural language preferences."""
+def semantic_property_search(search_query: str, excluded_property_id: list[str]) -> str:
+    """Use this to search the real estate database. Pass an excluded_property_id to skip a specific house."""
     global db_instance
-    print("[SERVER LOG] Attempt to boot the database server", file=sys.stderr)
-    # --- LAZY LOADING ---
-    # If the database hasn't been turned on yet, boot it up now!
     if db_instance is None:
-        print("[SERVER LOG] First search detected! Booting Vector DB...", file=sys.stderr)
         db_instance = PropertyDatabase()
-        print("[SERVER LOG] Vector DB populated and ready.", file=sys.stderr)
-    # --------------------
 
-    print(f"[SERVER LOG] Executing semantic search for: '{search_query}'...", file=sys.stderr)
-    return db_instance.search_properties(search_query)
+    print(f"[SERVER LOG] Executing search (Excluding: '{excluded_property_id}')...", file=sys.stderr)
+    return db_instance.search_properties(search_query, excluded_property_id)
 
 if __name__ == "__main__":
     # The server runs immediately and silently, ready to handshake!
