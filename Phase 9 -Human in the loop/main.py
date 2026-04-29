@@ -150,14 +150,18 @@ async def run_graph():
         global bob_agent, nancy_agent, alice_agent
         bob_agent = PropertyAgent(
             name="Bob", 
-            role="Senior Real Estate Realtor", 
+            role="Senior Real Estate Realtor. Your job is to find properties matching user needs. Do not perform mortgage math or legal reviews.", 
             tool_manager=mcp_tools,
             response_schema=BobOutput # <-- Force Bob to output JSON!
         )
-        nancy_agent = PropertyAgent("Nancy", "Mortgage Broker", mcp_tools)
+        nancy_agent = PropertyAgent(
+            name ="Nancy", 
+            role = "Mortgage Broker. Your job is to perform financial calculations for properties found by the Realtor. Do not search for new listings or provide legal advice.", 
+            tool_manager=mcp_tools
+        )
         alice_agent = PropertyAgent(
             name="Alice", 
-            role="Legal Reviewer", 
+            role="Legal Reviewer. Your job is to approve or reject the team's work. You are strictly forbidden from using tools to search or calculate values yourself.", 
             tool_manager=mcp_tools, 
             response_schema=AliceOutput
         )
